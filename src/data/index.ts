@@ -1,4 +1,5 @@
 import type { Place } from "@/lib/types";
+import { ONTARIO_PLACES } from "./ontario";
 import { EUROPE_PLACES } from "./europe";
 import { ASIA_PLACES } from "./asia";
 import { AMERICAS_PLACES } from "./americas";
@@ -6,6 +7,7 @@ import { AFRICA_PLACES } from "./africa";
 import { OCEANIA_PLACES } from "./oceania";
 
 export const ALL_PLACES: Place[] = [
+  ...ONTARIO_PLACES,
   ...EUROPE_PLACES,
   ...ASIA_PLACES,
   ...AMERICAS_PLACES,

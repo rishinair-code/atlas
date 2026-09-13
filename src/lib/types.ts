@@ -8,6 +8,7 @@ export type ActivityId =
   | "museums"
   | "nightlife"
   | "nature"
+  | "waterfalls"
   | "wildlife"
   | "winter"
   | "wellness"
@@ -15,7 +16,10 @@ export type ActivityId =
   | "culture"
   | "adventure"
   | "romantic"
-  | "family";
+  | "family"
+  | "cycling"
+  | "boating"
+  | "swimming";
 
 export type PlaceKind =
   | "city"
@@ -24,6 +28,8 @@ export type PlaceKind =
   | "island"
   | "national-park"
   | "landmark"
+  | "waterfall"
+  | "nature"
   | "beach"
   | "mountain"
   | "lake"
