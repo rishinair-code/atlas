@@ -56,3 +56,11 @@ export function clearLocation(): void {
     // Ignore.
   }
 }
+
+/**
+ * Short display name for the "using location" chip: a city preset or
+ * geocode hit shows its name; a detected GPS fix reads as "Current".
+ */
+export function locationDisplayName(loc: SavedLocation): string {
+  return loc.source === "detected" ? "Current location" : loc.label;
+}

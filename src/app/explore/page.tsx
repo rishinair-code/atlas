@@ -1,6 +1,6 @@
 import Link from "next/link";
 import { ALL_PLACES, REGIONS } from "@/data";
-import { ACTIVITY_MAP, activityEmoji, activityLabel } from "@/lib/activities";
+import { ACTIVITY_MAP, KINDS_BY_ACTIVITY, activityEmoji, activityLabel } from "@/lib/activities";
 import { formatMonth } from "@/lib/format";
 import { activityCounts } from "@/lib/discover";
 import { haversineKm } from "@/lib/geo";
@@ -101,6 +101,15 @@ export default async function ExplorePage({
   results = results.slice(0, 90);
 
   const counts = activityCounts();
+
+  // Type dropdown options: when an activity is chosen, only its plausible
+  // subtypes (Architecture → Cities/Landmarks/Ruins, never Beach). The
+  // currently selected kind always stays visible for transparency.
+  const allowedKinds = activity ? KINDS_BY_ACTIVITY[activity as ActivityId] : undefined;
+  const kindKeys: PlaceKind[] = allowedKinds
+    ? [...new Set([...allowedKinds, ...(kind ? [kind as PlaceKind] : [])])]
+    : (Object.keys(KIND_LABELS) as PlaceKind[]);
+
   const keep: Record<string, string> = {};
   if (activity) keep.activity = activity;
   if (kind) keep.kind = kind;
@@ -202,7 +211,7 @@ export default async function ExplorePage({
       {/* Type + budget + sort + region rows */}
       <div className="mt-3 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
         <div className="flex items-center gap-2">
-          <span className="text-slate-500">Type</span>
+          <span className="text-slate-500">{activity ? "Subtype" : "Type"}</span>
           <form action="/explore" method="get" className="inline">
             {Object.entries(keep)
               .filter(([k]) => k !== "kind")
@@ -214,8 +223,8 @@ export default async function ExplorePage({
               defaultValue={kind ?? ""}
               className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm"
             >
-              <option value="">Any type</option>
-              {(Object.keys(KIND_LABELS) as PlaceKind[]).map((k) => (
+              <option value="">Any {activity ? "subtype" : "type"}</option>
+              {kindKeys.map((k) => (
                 <option key={k} value={k}>
                   {KIND_LABELS[k]}
                 </option>

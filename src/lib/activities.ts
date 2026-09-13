@@ -1,4 +1,4 @@
-import type { ActivityId } from "./types";
+import type { ActivityId, PlaceKind } from "./types";
 
 export interface ActivityDef {
   id: ActivityId;
@@ -33,6 +33,33 @@ export const ACTIVITIES: ActivityDef[] = [
 export const ACTIVITY_MAP: Record<ActivityId, ActivityDef> = Object.fromEntries(
   ACTIVITIES.map((a) => [a.id, a]),
 ) as Record<ActivityId, ActivityDef>;
+
+/**
+ * Place subtypes that make sense as results for each activity. When an
+ * activity filter is active, the "Type" dropdown narrows to these instead
+ * of listing every kind (no more "Beach" while filtering Architecture).
+ */
+export const KINDS_BY_ACTIVITY: Partial<Record<ActivityId, PlaceKind[]>> = {
+  beach: ["beach", "island", "resort"],
+  hiking: ["mountain", "national-park", "nature", "waterfall"],
+  architecture: ["city", "town", "village", "landmark", "ruins"],
+  food: ["city", "town", "village"],
+  museums: ["city", "town", "landmark"],
+  nightlife: ["city", "town"],
+  nature: ["nature", "national-park", "lake", "mountain", "waterfall", "beach", "island", "desert"],
+  waterfalls: ["waterfall", "nature", "national-park"],
+  wildlife: ["national-park", "nature", "island", "lake"],
+  winter: ["mountain", "resort", "town", "village"],
+  wellness: ["resort", "town", "nature"],
+  shopping: ["city", "town"],
+  culture: ["city", "town", "village", "ruins", "landmark"],
+  adventure: ["island", "mountain", "nature", "national-park", "lake", "resort"],
+  romantic: ["island", "beach", "resort", "town", "city"],
+  family: ["beach", "island", "city", "town", "national-park", "resort"],
+  cycling: ["town", "village", "nature", "national-park", "island"],
+  boating: ["lake", "island", "beach", "town", "nature"],
+  swimming: ["beach", "lake", "island", "nature", "waterfall"],
+};
 
 export function activityLabel(id: ActivityId): string {
   return ACTIVITY_MAP[id]?.label ?? id;

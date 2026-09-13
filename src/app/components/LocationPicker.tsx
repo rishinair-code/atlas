@@ -6,6 +6,8 @@ import {
   loadLocation,
   saveLocation,
   clearLocation,
+  locationDisplayName,
+  type SavedLocation,
 } from "@/lib/location";
 
 interface GeocodeHit {
@@ -45,7 +47,25 @@ export default function LocationPicker({
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<GeocodeHit[]>([]);
   const [locating, setLocating] = useState(false);
+  const [active, setActive] = useState<SavedLocation | null>(null);
   const seq = useRef(0);
+
+  // Reflect whichever location is in effect (URL pin or saved pick) so the
+  // user can see Atlas is using it without re-detecting every visit.
+  useEffect(() => {
+    const saved = loadLocation();
+    if (lat && lng) {
+      const matchesSaved = saved && within1km(lat, lng, saved.lat, saved.lng);
+      setActive(
+        matchesSaved
+          ? saved
+          : { lat: Number(lat), lng: Number(lng), label: "Selected point", source: "city" },
+      );
+    } else if (saved) {
+      setActive(saved);
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   // A location in the URL wins; otherwise restore the saved one so users
   // don't re-detect on every visit.
@@ -91,6 +111,7 @@ export default function LocationPicker({
   /** Push the new coordinates into the URL and persist them. */
   function pickAndGo(p: { lat: number; lng: number; label: string; source: "detected" | "city" }) {
     saveLocation(p);
+    setActive(p);
     go({
       lat: p.lat.toFixed(4),
       lng: p.lng.toFixed(4),
@@ -100,6 +121,7 @@ export default function LocationPicker({
 
   function clearAndGo() {
     clearLocation();
+    setActive(null);
     const params = new URLSearchParams({ ...(keepParams ?? {}) });
     router.push(`/explore?${params.toString()}`);
   }
@@ -155,6 +177,22 @@ export default function LocationPicker({
           </button>
         )}
       </div>
+
+      {active && (
+        <p className="inline-flex w-fit items-center gap-2 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-400">
+          <span aria-hidden>📍</span>
+          <span>
+            Using: <strong className="font-semibold">{locationDisplayName(active)}</strong>
+          </span>
+          <button
+            onClick={clearAndGo}
+            className="ml-1 rounded text-emerald-500/70 hover:text-red-400"
+            aria-label="Clear saved location"
+          >
+            ✕
+          </button>
+        </p>
+      )}
 
       <div className="relative max-w-md">
         <input

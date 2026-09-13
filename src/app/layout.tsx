@@ -27,15 +27,12 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
               <a href="/explore" className="hover:text-white">
                 Explore
               </a>
-              <a href="/explore?activity=hiking" className="hover:text-white">
-                Hiking
-              </a>
             </nav>
           </div>
         </header>
         <main className="flex-1">{children}</main>
         <footer className="border-t border-slate-800 py-6 text-center text-xs text-slate-500">
-          Atlas — separate project, separate database. 🧭
+          Atlas — discover the world, near and far. 🧭
         </footer>
       </body>
     </html>

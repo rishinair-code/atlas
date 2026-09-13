@@ -5,10 +5,16 @@ import Link from "next/link";
 import type { ActivityId, CostTier, PlaceKind } from "@/lib/types";
 import { ALL_PLACES } from "@/data";
 import { haversineKm } from "@/lib/geo";
-import { ACTIVITY_MAP } from "@/lib/activities";
+import { ACTIVITY_MAP, KINDS_BY_ACTIVITY } from "@/lib/activities";
 import PlaceCard from "./PlaceCard";
 import LivePoiCard, { type LivePoi } from "./LivePoiCard";
-import { loadLocation, saveLocation, clearLocation } from "@/lib/location";
+import {
+  loadLocation,
+  saveLocation,
+  clearLocation,
+  locationDisplayName,
+  type SavedLocation,
+} from "@/lib/location";
 const RADIUS_OPTIONS = [50, 150, 400, 1000];
 const RADIUS_LABELS: Record<number, string> = {
   50: "50 km",
@@ -45,7 +51,7 @@ interface GeocodeHit {
  * Results fuse the curated dataset with live OpenStreetMap POIs.
  */
 export default function Discover() {
-  const [point, setPoint] = useState<{ lat: number; lng: number; label: string } | null>(null);
+  const [point, setPoint] = useState<SavedLocation | null>(null);
   const [radiusKm, setRadiusKm] = useState(150);
   const [activity, setActivity] = useState<ActivityId | "">("");
   const [kind, setKind] = useState<PlaceKind | "">("");
@@ -55,7 +61,8 @@ export default function Discover() {
   const [locError, setLocError] = useState<"denied" | "failed" | null>(null);
 
   // Restore a saved location once on mount so the pick survives reloads
-  // and navigation between the home and Explore pages.
+  // and navigation between the home and Explore pages. The restored point
+  // renders immediately, signalling that Atlas remembered the location.
   useEffect(() => {
     setPoint(loadLocation());
   }, []);
@@ -195,14 +202,24 @@ export default function Discover() {
 
   const showLive = Boolean(point) && !kind && !maxTier;
 
+  // Subtypes for the Type dropdown: restricted to the chosen activity when
+  // one is active, otherwise whatever exists within the search radius.
   const kindsAvailable = useMemo(() => {
+    const fromActivity = activity ? KINDS_BY_ACTIVITY[activity] : undefined;
+    if (fromActivity) {
+      // Always keep the currently selected subtype visible, even if the
+      // mapping wouldn't list it — clearing it silently is worse.
+      const list = new Set<PlaceKind>(fromActivity);
+      if (kind) list.add(kind);
+      return [...list];
+    }
     if (!point) return [];
     const set = new Set<PlaceKind>();
     for (const p of ALL_PLACES) {
       if (haversineKm(point.lat, point.lng, p.lat, p.lng) <= radiusKm) set.add(p.kind);
     }
     return [...set].sort();
-  }, [point, radiusKm]);
+  }, [point, radiusKm, activity, kind]);
 
   return (
     <section className="mt-10">
@@ -214,6 +231,21 @@ export default function Discover() {
       </p>
 
       {/* Location row */}
+      {point && (
+        <p className="mt-3 inline-flex items-center gap-2 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-400">
+          <span aria-hidden>📍</span>
+          <span>
+            Using: <strong className="font-semibold">{locationDisplayName(point)}</strong>
+          </span>
+          <button
+            onClick={() => setAndRemember(null)}
+            className="ml-1 rounded text-emerald-500/70 hover:text-red-400"
+            aria-label="Clear saved location"
+          >
+            ✕
+          </button>
+        </p>
+      )}
       <div className="mt-4 flex flex-wrap items-center gap-2 text-sm">
         <button
           onClick={locate}
@@ -304,7 +336,15 @@ export default function Discover() {
               <select
                 id="disc-activity"
                 value={activity}
-                onChange={(e) => setActivity(e.target.value as ActivityId | "")}
+                onChange={(e) => {
+                  const next = e.target.value as ActivityId | "";
+                  setActivity(next);
+                  // Drop a subtype that no longer applies to the new
+                  // activity (e.g. Beach lingering after switching from
+                  // Beach to Architecture).
+                  const allowed = next ? KINDS_BY_ACTIVITY[next] : undefined;
+                  if (kind && allowed && !allowed.includes(kind)) setKind("");
+                }}
                 className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm"
               >
                 <option value="">Anything</option>
@@ -317,7 +357,7 @@ export default function Discover() {
             </div>
             <div className="flex items-center gap-2">
               <label className="text-slate-500" htmlFor="disc-kind">
-                Type
+                {activity ? "Subtype" : "Type"}
               </label>
               <select
                 id="disc-kind"
@@ -325,7 +365,7 @@ export default function Discover() {
                 onChange={(e) => setKind(e.target.value as PlaceKind | "")}
                 className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm"
               >
-                <option value="">Any type</option>
+                <option value="">Any {activity ? "subtype" : "type"}</option>
                 {kindsAvailable.map((k) => (
                   <option key={k} value={k}>
                     {kindLabel(k)}
