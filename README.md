@@ -22,6 +22,8 @@ has to re-detect their location after a reload.
 - The repo is connected to Vercel via the **GitHub integration** (set up in
   an earlier session; the Vercel account is `rishinair-code`'s, project
   `atlas`, scope `rishinair-codes-projects`).
+  - GitHub repo: https://github.com/rishinair-code/atlas
+  - Vercel dashboard: https://vercel.com/rishinair-codes-projects/atlas
 - Every push to `main` auto-builds and promotes to Production (~25 s build).
   No Vercel CLI login exists on this machine and none is needed.
 - Per-build URLs (`atlas-<hash>-….vercel.app`) are SSO-gated by Vercel
