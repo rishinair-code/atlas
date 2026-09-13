@@ -4,9 +4,10 @@ import { ACTIVITY_MAP, activityEmoji, activityLabel } from "@/lib/activities";
 import { formatMonth } from "@/lib/format";
 import { activityCounts } from "@/lib/discover";
 import { haversineKm } from "@/lib/geo";
-import type { ActivityId, CostTier, PlaceKind } from "@/lib/types";
+import type { ActivityId, PlaceKind } from "@/lib/types";
 import LocationPicker from "../components/LocationPicker";
 import AutoSelect from "../components/AutoSelect";
+import LiveResults from "../components/LiveResults";
 
 export const metadata = { title: "Explore — Atlas" };
 
@@ -127,7 +128,7 @@ export default async function ExplorePage({
       <h1 className="text-3xl font-bold tracking-tight">Explore destinations</h1>
       <p className="mt-2 text-slate-400">
         {ALL_PLACES.length} places — filter by activity, type, budget, and how
-        far you're willing to go.
+    far you&apos;re willing to go.
       </p>
 
       {/* Location */}
@@ -356,8 +357,22 @@ export default async function ExplorePage({
 
       {results.length === 0 && (
         <p className="mt-10 text-center text-slate-500">
-          No places match. Try removing a filter.
+          No curated places match here — the live map below still has you
+          covered. Try removing a filter, too.
         </p>
+      )}
+
+      {/* Live OpenStreetMap results for the same location + activity — the
+          curated dataset is deliberately small, so the real world fills in
+          the gaps (e.g. museums in Hamilton, beaches in Miami). */}
+      {hasLocation && lat !== null && lng !== null && !kind && !maxTier && (
+        <LiveResults
+          lat={lat}
+          lng={lng}
+          category={activity ?? ""}
+          radiusKm={radius}
+          excludeNames={results.map((r) => r.place.name)}
+        />
       )}
     </div>
   );

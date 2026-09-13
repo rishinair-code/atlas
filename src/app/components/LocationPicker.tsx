@@ -2,6 +2,11 @@
 
 import { useEffect, useRef, useState } from "react";
 import { useRouter } from "next/navigation";
+import {
+  loadLocation,
+  saveLocation,
+  clearLocation,
+} from "@/lib/location";
 
 interface GeocodeHit {
   id: number;
@@ -21,7 +26,9 @@ const CITY_PRESETS = [
 
 /**
  * Location controls for URL-driven pages: detect, presets, and worldwide
- * city search. Selection updates ?lat/?lng in the address bar.
+ * city search. Selection updates ?lat/?lng in the address bar AND is saved
+ * to localStorage, so it survives reloads and navigation. A saved location
+ * is restored on mount unless the URL already pins one.
  */
 export default function LocationPicker({
   lat,
@@ -39,6 +46,21 @@ export default function LocationPicker({
   const [hits, setHits] = useState<GeocodeHit[]>([]);
   const [locating, setLocating] = useState(false);
   const seq = useRef(0);
+
+  // A location in the URL wins; otherwise restore the saved one so users
+  // don't re-detect on every visit.
+  useEffect(() => {
+    if (lat && lng) return;
+    const saved = loadLocation();
+    if (saved) {
+      go({
+        lat: saved.lat.toFixed(4),
+        lng: saved.lng.toFixed(4),
+        radius: radius ?? "150",
+      });
+    }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
 
   useEffect(() => {
     const q = query.trim();
@@ -66,6 +88,22 @@ export default function LocationPicker({
     router.push(`/explore?${params.toString()}`);
   }
 
+  /** Push the new coordinates into the URL and persist them. */
+  function pickAndGo(p: { lat: number; lng: number; label: string; source: "detected" | "city" }) {
+    saveLocation(p);
+    go({
+      lat: p.lat.toFixed(4),
+      lng: p.lng.toFixed(4),
+      radius: radius ?? "150",
+    });
+  }
+
+  function clearAndGo() {
+    clearLocation();
+    const params = new URLSearchParams({ ...(keepParams ?? {}) });
+    router.push(`/explore?${params.toString()}`);
+  }
+
   const hasLocation = Boolean(lat && lng);
 
   return (
@@ -77,10 +115,11 @@ export default function LocationPicker({
             navigator.geolocation.getCurrentPosition(
               (pos) => {
                 setLocating(false);
-                go({
-                  lat: pos.coords.latitude.toFixed(4),
-                  lng: pos.coords.longitude.toFixed(4),
-                  radius: radius ?? "150",
+                pickAndGo({
+                  lat: pos.coords.latitude,
+                  lng: pos.coords.longitude,
+                  label: "your location",
+                  source: "detected",
                 });
               },
               () => setLocating(false),
@@ -95,7 +134,9 @@ export default function LocationPicker({
         {CITY_PRESETS.map((c) => (
           <button
             key={c.label}
-            onClick={() => go({ lat: String(c.lat), lng: String(c.lng), radius: radius ?? "150" })}
+            onClick={() =>
+              pickAndGo({ lat: c.lat, lng: c.lng, label: c.label, source: "city" })
+            }
             className={`rounded-full px-3 py-1 border ${
               hasLocation && within1km(lat, lng, c.lat, c.lng)
                 ? "border-emerald-500 text-emerald-400"
@@ -107,10 +148,7 @@ export default function LocationPicker({
         ))}
         {hasLocation && (
           <button
-            onClick={() => {
-              const params = new URLSearchParams({ ...(keepParams ?? {}) });
-              router.push(`/explore?${params.toString()}`);
-            }}
+            onClick={clearAndGo}
             className="rounded-full px-3 py-1 border border-slate-700 text-slate-400 hover:border-red-500 hover:text-red-400"
           >
             ✕ Clear location
@@ -132,10 +170,11 @@ export default function LocationPicker({
               <li key={h.id}>
                 <button
                   onClick={() => {
-                    go({
-                      lat: String(h.latitude),
-                      lng: String(h.longitude),
-                      radius: radius ?? "150",
+                    pickAndGo({
+                      lat: h.latitude,
+                      lng: h.longitude,
+                      label: h.name,
+                      source: "city",
                     });
                     setQuery("");
                     setHits([]);

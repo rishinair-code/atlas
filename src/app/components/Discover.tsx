@@ -7,7 +7,8 @@ import { ALL_PLACES } from "@/data";
 import { haversineKm } from "@/lib/geo";
 import { ACTIVITY_MAP } from "@/lib/activities";
 import PlaceCard from "./PlaceCard";
-
+import LivePoiCard, { type LivePoi } from "./LivePoiCard";
+import { loadLocation, saveLocation, clearLocation } from "@/lib/location";
 const RADIUS_OPTIONS = [50, 150, 400, 1000];
 const RADIUS_LABELS: Record<number, string> = {
   50: "50 km",
@@ -16,9 +17,13 @@ const RADIUS_LABELS: Record<number, string> = {
   1000: "1,000 km",
 };
 
+/** Overpass query radius cap (metres) enforced by /api/places/nearby. */
+const LIVE_RADIUS_CAP_M = 50_000;
+
 const CITY_PRESETS: { label: string; lat: number; lng: number }[] = [
   { label: "Hamilton", lat: 43.2563, lng: -79.8689 },
   { label: "Toronto", lat: 43.6532, lng: -79.3832 },
+  { label: "Miami", lat: 25.7617, lng: -80.1918 },
   { label: "New York", lat: 40.7128, lng: -74.006 },
   { label: "San Francisco", lat: 37.7749, lng: -122.4194 },
   { label: "London", lat: 51.5072, lng: -0.1276 },
@@ -37,6 +42,7 @@ interface GeocodeHit {
 /**
  * Discovery panel: pick any location (detect, presets, or worldwide city
  * search), then filter by activity, place type, budget, radius and sort.
+ * Results fuse the curated dataset with live OpenStreetMap POIs.
  */
 export default function Discover() {
   const [point, setPoint] = useState<{ lat: number; lng: number; label: string } | null>(null);
@@ -48,10 +54,20 @@ export default function Discover() {
   const [locating, setLocating] = useState(false);
   const [locError, setLocError] = useState<"denied" | "failed" | null>(null);
 
+  // Restore a saved location once on mount so the pick survives reloads
+  // and navigation between the home and Explore pages.
+  useEffect(() => {
+    setPoint(loadLocation());
+  }, []);
+
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<GeocodeHit[]>([]);
   const [searching, setSearching] = useState(false);
   const searchSeq = useRef(0);
+
+  const [live, setLive] = useState<LivePoi[]>([]);
+  const [liveState, setLiveState] = useState<"idle" | "loading" | "ok" | "error">("idle");
+  const liveSeq = useRef(0);
 
   // Worldwide city autocomplete via Open-Meteo geocoding (free, no key).
   useEffect(() => {
@@ -78,11 +94,52 @@ export default function Discover() {
     return () => clearTimeout(t);
   }, [query]);
 
+  // Live OpenStreetMap POIs — fetched whenever a point is set and the
+  // dataset-only filters (type/budget) are off.
+  useEffect(() => {
+    if (!point || kind || maxTier) {
+      setLive([]);
+      setLiveState("idle");
+      return;
+    }
+    const seq = ++liveSeq.current;
+    setLiveState("loading");
+    // The live OSM query is capped at 50 km — larger areas make Overpass
+    // crawl; the curated dataset still covers the wide radii.
+    const liveRadiusM = Math.min(radiusKm * 1000, LIVE_RADIUS_CAP_M);
+    const params = new URLSearchParams({
+      lat: String(point.lat),
+      lng: String(point.lng),
+      radius: String(liveRadiusM),
+    });
+    if (activity) params.set("category", activity);
+    (async () => {
+      try {
+        const res = await fetch(`/api/places/nearby?${params.toString()}`);
+        const json = (await res.json()) as { pois?: LivePoi[] };
+        if (seq !== liveSeq.current) return;
+        setLive(json.pois ?? []);
+        setLiveState("ok");
+      } catch {
+        if (seq !== liveSeq.current) return;
+        setLive([]);
+        setLiveState("error");
+      }
+    })();
+  }, [point, radiusKm, activity, kind, maxTier]);
+
+  function setAndRemember(p: { lat: number; lng: number; label: string; source: "detected" | "city" } | null) {
+    setPoint(p);
+    if (p) saveLocation(p);
+    else clearLocation();
+  }
+
   function pick(hit: GeocodeHit) {
-    setPoint({
+    setAndRemember({
       lat: hit.latitude,
       lng: hit.longitude,
       label: hit.name,
+      source: "city",
     });
     setQuery("");
     setHits([]);
@@ -93,10 +150,11 @@ export default function Discover() {
     setLocError(null);
     navigator.geolocation.getCurrentPosition(
       (pos) => {
-        setPoint({
+        setAndRemember({
           lat: pos.coords.latitude,
           lng: pos.coords.longitude,
           label: "your location",
+          source: "detected",
         });
         setLocating(false);
       },
@@ -124,6 +182,19 @@ export default function Discover() {
     return list.slice(0, 12);
   }, [point, radiusKm, activity, kind, maxTier, sort]);
 
+  // Live POIs, deduped against curated cards by name, sorted by distance.
+  const liveResults = useMemo(() => {
+    if (!point) return [];
+    const curatedNames = new Set(results.map((r) => r.place.name.toLowerCase()));
+    return live
+      .map((poi) => ({ poi, distanceKm: haversineKm(point.lat, point.lng, poi.lat, poi.lng) }))
+      .filter((r) => !curatedNames.has(r.poi.name.toLowerCase()))
+      .sort((a, b) => a.distanceKm - b.distanceKm)
+      .slice(0, 12);
+  }, [live, point, results]);
+
+  const showLive = Boolean(point) && !kind && !maxTier;
+
   const kindsAvailable = useMemo(() => {
     if (!point) return [];
     const set = new Set<PlaceKind>();
@@ -138,7 +209,8 @@ export default function Discover() {
       <h2 className="text-xl font-semibold">Discover near you</h2>
       <p className="mt-1 text-sm text-slate-400">
         Set your location — detect it or search any city on Earth — then filter
-        by what you want to do.
+        by what you want to do. Results combine the curated atlas with live
+        OpenStreetMap places.
       </p>
 
       {/* Location row */}
@@ -153,7 +225,7 @@ export default function Discover() {
         {CITY_PRESETS.map((c) => (
           <button
             key={c.label}
-            onClick={() => setPoint({ lat: c.lat, lng: c.lng, label: c.label })}
+            onClick={() => setAndRemember({ lat: c.lat, lng: c.lng, label: c.label, source: "city" })}
             className={`rounded-full px-3 py-1 border ${
               point?.label === c.label
                 ? "border-emerald-500 text-emerald-400"
@@ -201,7 +273,7 @@ export default function Discover() {
       )}
       {locError === "failed" && (
         <p className="mt-2 text-xs text-amber-400">
-          Couldn't detect your location — search a city above instead.
+          Couldn&apos;t detect your location — search a city above instead.
         </p>
       )}
 
@@ -297,22 +369,48 @@ export default function Discover() {
           </div>
 
           <p className="mt-4 text-xs text-slate-500">
-            {results.length} place{results.length === 1 ? "" : "s"} within{" "}
+            {results.length} curated place{results.length === 1 ? "" : "s"} within{" "}
             {RADIUS_LABELS[radiusKm]} of {point.label}
+            {showLive && liveState === "ok" && (
+              <>
+                {" · "}
+                {liveResults.length} live from OpenStreetMap
+                {radiusKm > 50 && " (live search capped at 50 km)"}
+              </>
+            )}
+            {showLive && liveState === "loading" && " · searching the live map…"}
           </p>
 
-          <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-            {results.map(({ place, distanceKm }) => (
-              <div key={place.id} className="relative">
-                <PlaceCard place={place} />
-                <span className="absolute right-3 top-3 rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-400">
-                  {distanceKm < 10 ? distanceKm.toFixed(1) : Math.round(distanceKm)} km
-                </span>
-              </div>
-            ))}
-          </div>
+          {results.length > 0 && (
+            <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+              {results.map(({ place, distanceKm }) => (
+                <div key={place.id} className="relative">
+                  <PlaceCard place={place} />
+                  <span className="absolute right-3 top-3 rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-400">
+                    {distanceKm < 10 ? distanceKm.toFixed(1) : Math.round(distanceKm)} km
+                  </span>
+                </div>
+              ))}
+            </div>
+          )}
 
-          {results.length === 0 && (
+          {showLive && liveResults.length > 0 && (
+            <>
+              <h3 className="mt-8 text-lg font-semibold">
+                More near {point.label}
+                <span className="ml-2 align-middle text-xs font-normal text-slate-500">
+                  live · OpenStreetMap
+                </span>
+              </h3>
+              <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+                {liveResults.map(({ poi, distanceKm }) => (
+                  <LivePoiCard key={poi.id} poi={poi} distanceKm={distanceKm} />
+                ))}
+              </div>
+            </>
+          )}
+
+          {results.length === 0 && liveResults.length === 0 && liveState !== "loading" && (
             <p className="mt-4 text-sm text-slate-500">
               Nothing matches here — widen the radius or relax a filter.
             </p>
@@ -320,9 +418,9 @@ export default function Discover() {
 
           <Link
             href={`/explore?lat=${point.lat}&lng=${point.lng}&radius=${radiusKm}${activity ? `&activity=${activity}` : ""}`}
-            className="mt-4 inline-block text-sm text-emerald-400 hover:text-emerald-300"
+            className="mt-6 inline-block text-sm text-emerald-400 hover:text-emerald-300"
           >
-            See all matches on the Explore page →
+            Browse the atlas on the Explore page →
           </Link>
         </>
       )}
