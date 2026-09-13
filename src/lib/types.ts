@@ -57,6 +57,20 @@ export interface Place {
   /** 0–100 relative fame; low values surface hidden gems. */
   popularity: number;
   blurb: string;
+  /** Optional deep-dive content for the place detail page. */
+  details?: PlaceDetails;
+}
+
+/** Rich guide content shown on /place/[id]. All fields optional. */
+export interface PlaceDetails {
+  /** Named neighbourhoods/areas with a one-line hook each. */
+  popularAreas?: { name: string; note: string }[];
+  /** Where to stay — neighbourhood + what it's good for. */
+  whereToStay?: { area: string; note: string }[];
+  /** Signature eats, from street food to sit-down. */
+  foodDrink?: { name: string; note: string }[];
+  /** Only-here experiences and practical know-before-you-go notes. */
+  tips?: string[];
 }
 
 export interface VisitedEntry {

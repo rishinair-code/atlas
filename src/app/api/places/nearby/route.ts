@@ -7,6 +7,8 @@ const OVERPASS_ENDPOINTS = [
   // loaded than the main instance, which 504s under load.
   "https://overpass.kumi.systems/api/interpreter",
   "https://overpass-api.de/api/interpreter",
+  // Official main instance — third cab off the rank.
+  "https://overpass.private.coffee/api/interpreter",
 ];
 const OVERPASS_HEADERS = {
   "Content-Type": "application/x-www-form-urlencoded",
@@ -108,9 +110,10 @@ export async function GET(req: NextRequest) {
   const clauses = tags.map((tag) => `node${around}${tag};way${around}${tag};relation${around}${tag};`).join("");
   const query = `[out:json][timeout:25];(${clauses});out center 60;`;
 
-  // Race both endpoints in parallel — mirrors occasionally hang; taking the
-  // first success keeps worst-case latency near the fastest instance.
-  const attempts = OVERPASS_ENDPOINTS.map(async (endpoint) => {
+  const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+  /** One fetch attempt against a single endpoint. */
+  const attempt = async (query: string, endpoint: string) => {
     const res = await fetch(endpoint, {
       method: "POST",
       headers: OVERPASS_HEADERS,
@@ -119,13 +122,30 @@ export async function GET(req: NextRequest) {
     });
     if (!res.ok) throw new Error(`overpass ${res.status}`);
     return (await res.json()) as { elements: OverpassElement[] };
-  });
+  };
+
+  /** Race every mirror; on total failure, pause and retry the race once. */
+  async function runOverpass(query: string) {
+    try {
+      return await Promise.any(OVERPASS_ENDPOINTS.map((e) => attempt(query, e)));
+    } catch (firstErr) {
+      // Mirrors often fail transiently under load — one round of retries
+      // rescues most otherwise-empty responses.
+      await sleep(4_000);
+      try {
+        return await Promise.any(OVERPASS_ENDPOINTS.map((e) => attempt(query, e)));
+      } catch {
+        throw firstErr;
+      }
+    }
+  }
 
   try {
-    const json = await Promise.any(attempts);
+    const json = await runOverpass(query);
 
+    const toPois = (elements: OverpassElement[]) => {
       const seen = new Set<string>();
-      const pois = json.elements
+      return elements
         .map((e) => {
           const c = e.center ?? { lat: e.lat!, lon: e.lon! };
           const name = e.tags?.["name:en"] ?? e.tags?.name;
@@ -149,8 +169,36 @@ export async function GET(req: NextRequest) {
           if (seen.has(key)) return false;
           seen.add(key);
           return true;
-        })
-        .slice(0, 40);
+        });
+    };
+
+    let pois = toPois(json.elements);
+
+    // Sparse activity coverage (e.g. small cities) — broaden with any named
+    // tourism/historic feature in the radius so the section is never empty.
+    if (pois.length < 8) {
+      const broad = `(around:${radius},${lat},${lng})`;
+      const broadTags = ['["name"]["tourism"]', '["name"]["historic"]'];
+      const broadClauses = broadTags
+        .map((tag) => `node${broad}${tag};way${broad}${tag};relation${broad}${tag};`)
+        .join("");
+      const broadQuery = `[out:json][timeout:20];(${broadClauses});out center 40;`;
+      try {
+        const broadJson = await runOverpass(broadQuery);
+        const merged = [...toPois(broadJson.elements), ...pois];
+        const seen = new Set<string>();
+        pois = merged.filter((p) => {
+          const key = p.name!.toLowerCase();
+          if (seen.has(key)) return false;
+          seen.add(key);
+          return true;
+        });
+      } catch {
+        // Broadening is best-effort; return what we have.
+      }
+    }
+
+    pois = pois.slice(0, 40);
 
       return NextResponse.json(
         { pois },

@@ -5,6 +5,7 @@ import { ACTIVITY_MAP } from "@/lib/activities";
 import { formatMonth } from "@/lib/format";
 import { haversineKm } from "@/lib/geo";
 import type { NearbyResult } from "@/lib/discover";
+import PlaceGuide from "@/app/components/PlaceGuide";
 
 export function generateStaticParams() {
   return ALL_PLACES.map((p) => ({ id: p.id }));
@@ -78,6 +79,8 @@ export default async function PlacePage({ params }: { params: Promise<{ id: stri
       >
         Open in Google Maps ↗
       </a>
+
+      <PlaceGuide details={place.details ?? {}} />
 
       <section className="mt-12">
         <h2 className="text-xl font-semibold">Closest other places</h2>

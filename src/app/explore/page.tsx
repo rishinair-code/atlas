@@ -373,8 +373,10 @@ export default async function ExplorePage({
 
       {/* Live OpenStreetMap results for the same location + activity — the
           curated dataset is deliberately small, so the real world fills in
-          the gaps (e.g. museums in Hamilton, beaches in Miami). */}
-      {hasLocation && lat !== null && lng !== null && !kind && !maxTier && (
+          the gaps (e.g. museums in Hamilton, beaches in Miami). Shown even
+          when type/budget filters are active: those only apply to the
+          curated list, and hiding the live map makes the page feel empty. */}
+      {hasLocation && lat !== null && lng !== null && (
         <LiveResults
           lat={lat}
           lng={lng}

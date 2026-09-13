@@ -101,10 +101,11 @@ export default function Discover() {
     return () => clearTimeout(t);
   }, [query]);
 
-  // Live OpenStreetMap POIs — fetched whenever a point is set and the
-  // dataset-only filters (type/budget) are off.
+  // Live OpenStreetMap POIs — fetched whenever a point is set. Type/budget
+  // filters only apply to the curated list; the live map stays visible so
+  // the page never feels empty in areas with thin curated coverage.
   useEffect(() => {
-    if (!point || kind || maxTier) {
+    if (!point) {
       setLive([]);
       setLiveState("idle");
       return;
@@ -120,12 +121,25 @@ export default function Discover() {
       radius: String(liveRadiusM),
     });
     if (activity) params.set("category", activity);
+    const fetchOnce = async () => {
+      const res = await fetch(`/api/places/nearby?${params.toString()}`);
+      const json = (await res.json()) as { pois?: LivePoi[]; error?: string };
+      if (!res.ok) throw new Error(json.error ?? `status ${res.status}`);
+      return json.pois ?? [];
+    };
     (async () => {
       try {
-        const res = await fetch(`/api/places/nearby?${params.toString()}`);
-        const json = (await res.json()) as { pois?: LivePoi[] };
+        let pois: LivePoi[];
+        try {
+          pois = await fetchOnce();
+        } catch {
+          // Overpass mirrors fail transiently — one retry after a beat.
+          await new Promise((r) => setTimeout(r, 5_000));
+          if (seq !== liveSeq.current) return;
+          pois = await fetchOnce();
+        }
         if (seq !== liveSeq.current) return;
-        setLive(json.pois ?? []);
+        setLive(pois);
         setLiveState("ok");
       } catch {
         if (seq !== liveSeq.current) return;
@@ -197,10 +211,10 @@ export default function Discover() {
       .map((poi) => ({ poi, distanceKm: haversineKm(point.lat, point.lng, poi.lat, poi.lng) }))
       .filter((r) => !curatedNames.has(r.poi.name.toLowerCase()))
       .sort((a, b) => a.distanceKm - b.distanceKm)
-      .slice(0, 12);
+      .slice(0, 24);
   }, [live, point, results]);
 
-  const showLive = Boolean(point) && !kind && !maxTier;
+  const showLive = Boolean(point);
 
   // Subtypes for the Type dropdown: restricted to the chosen activity when
   // one is active, otherwise whatever exists within the search radius.

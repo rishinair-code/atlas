@@ -38,12 +38,25 @@ export default function LiveResults({
       radius: String(liveRadiusM),
     });
     if (category) params.set("category", category);
+    const fetchOnce = async () => {
+      const res = await fetch(`/api/places/nearby?${params.toString()}`);
+      const json = (await res.json()) as { pois?: LivePoi[]; error?: string };
+      if (!res.ok) throw new Error(json.error ?? `status ${res.status}`);
+      return json.pois ?? [];
+    };
     (async () => {
       try {
-        const res = await fetch(`/api/places/nearby?${params.toString()}`);
-        const json = (await res.json()) as { pois?: LivePoi[] };
+        let pois: LivePoi[];
+        try {
+          pois = await fetchOnce();
+        } catch {
+          // Overpass mirrors fail transiently — one retry after a beat.
+          await new Promise((r) => setTimeout(r, 5_000));
+          if (s !== seq.current) return;
+          pois = await fetchOnce();
+        }
         if (s !== seq.current) return;
-        setLive(json.pois ?? []);
+        setLive(pois);
         setState("ok");
       } catch {
         if (s !== seq.current) return;
@@ -59,13 +72,22 @@ export default function LiveResults({
       .map((poi) => ({ poi, distanceKm: haversineKm(lat, lng, poi.lat, poi.lng) }))
       .filter((r) => !excluded.has(r.poi.name.toLowerCase()))
       .sort((a, b) => a.distanceKm - b.distanceKm)
-      .slice(0, 12);
+      .slice(0, 24);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [live, lat, lng, JSON.stringify(excludeNames)]);
 
   if (state === "loading" && results.length === 0) {
     return (
       <p className="mt-6 text-xs text-slate-500">Searching the live map near you…</p>
+    );
+  }
+
+  if (state === "error" && results.length === 0) {
+    return (
+      <p className="mt-6 text-xs text-slate-500">
+        The live map is busy right now — results will appear on the next
+        refresh.
+      </p>
     );
   }
 
