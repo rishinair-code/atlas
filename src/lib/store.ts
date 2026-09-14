@@ -38,6 +38,7 @@ function writeLocal(data: AtlasData) {
 let data: AtlasData = { visited: {}, wishlist: {}, trips: {} };
 let mode: "local" | "firebase" = "local";
 let inited = false;
+let ready = false;
 const listeners = new Set<Listener>();
 
 function emit() {
@@ -54,6 +55,18 @@ export function storeMode(): "local" | "firebase" {
   return mode;
 }
 
+/** True once the initial load (local or Firebase) has completed. */
+export function storeReady(): boolean {
+  return ready;
+}
+
+function markReady() {
+  if (!ready) {
+    ready = true;
+  }
+  emit();
+}
+
 export async function initStore(): Promise<void> {
   if (inited || typeof window === "undefined") return;
   inited = true;
@@ -61,7 +74,7 @@ export async function initStore(): Promise<void> {
   if (!isFirebaseConfigured()) {
     data = readLocal();
     mode = "local";
-    emit();
+    markReady();
     return;
   }
 
@@ -80,7 +93,7 @@ export async function initStore(): Promise<void> {
         } catch {
           mode = "local";
           data = readLocal();
-          emit();
+          markReady();
           return;
         }
       }
@@ -94,14 +107,14 @@ export async function initStore(): Promise<void> {
           trips: val?.trips ?? {},
         };
         mode = "firebase";
-        emit();
+        markReady();
       });
     });
   } catch (err) {
     console.warn("Firebase unavailable, using local mode.", err);
     mode = "local";
     data = readLocal();
-    emit();
+    markReady();
   }
 }
 

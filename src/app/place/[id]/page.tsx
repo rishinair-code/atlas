@@ -6,6 +6,8 @@ import { formatMonth } from "@/lib/format";
 import { haversineKm } from "@/lib/geo";
 import type { NearbyResult } from "@/lib/discover";
 import PlaceGuide from "@/app/components/PlaceGuide";
+import VisitedButton from "@/app/components/VisitedButton";
+import GettingThere from "@/app/components/GettingThere";
 
 export function generateStaticParams() {
   return ALL_PLACES.map((p) => ({ id: p.id }));
@@ -37,7 +39,10 @@ export default async function PlacePage({ params }: { params: Promise<{ id: stri
         <p className="mt-3 max-w-2xl text-slate-300">{place.blurb}</p>
       </header>
 
-      <div className="mt-6 flex flex-wrap gap-2">
+      <div className="mt-6 flex flex-wrap items-center gap-2">
+        <span className="mr-2">
+          <VisitedButton place={place} />
+        </span>
         {place.activities.map((a) => {
           const def = ACTIVITY_MAP[a];
           return (
@@ -60,16 +65,20 @@ export default async function PlacePage({ params }: { params: Promise<{ id: stri
           </dd>
         </div>
         <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
-          <dt className="text-xs uppercase tracking-wide text-slate-500">Daily budget</dt>
-          <dd className="mt-1 text-sm">Tier {place.costTier} ≈ ${place.costTier * 20}/day</dd>
-        </div>
-        <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
           <dt className="text-xs uppercase tracking-wide text-slate-500">Crowd level</dt>
           <dd className="mt-1 text-sm">
             {place.popularity >= 80 ? "Very popular" : place.popularity >= 50 ? "Popular" : "Hidden gem"}
           </dd>
         </div>
+        <div className="rounded-xl border border-slate-800 bg-slate-900 p-4">
+          <dt className="text-xs uppercase tracking-wide text-slate-500">On-site costs</dt>
+          <dd className="mt-1 text-sm">
+            {place.costTier <= 2 ? "Budget-friendly once you're there" : place.costTier === 3 ? "Moderate prices on the ground" : "Pricier destination once you're there"}
+          </dd>
+        </div>
       </dl>
+
+      <GettingThere place={place} />
 
       <a
         href={mapUrl}

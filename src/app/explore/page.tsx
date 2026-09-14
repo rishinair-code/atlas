@@ -8,6 +8,8 @@ import type { ActivityId, PlaceKind } from "@/lib/types";
 import LocationPicker from "../components/LocationPicker";
 import AutoSelect from "../components/AutoSelect";
 import LiveResults from "../components/LiveResults";
+import VisitedButton from "../components/VisitedButton";
+import TripHint from "../components/TripHint";
 
 export const metadata = { title: "Explore — Atlas" };
 
@@ -336,9 +338,17 @@ export default async function ExplorePage({
                     {place.country} · {KIND_LABELS[place.kind]}
                   </div>
                 </div>
-                <span className="rounded-full bg-slate-800 px-2 py-0.5 text-xs text-slate-300 whitespace-nowrap">
-                  ≈${place.costTier * 20}/day
-                </span>
+                <div className="flex flex-col items-end gap-1.5">
+                  {distanceKm !== null && (
+                    <span className="rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-400">
+                      {distanceKm < 10 ? distanceKm.toFixed(1) : Math.round(distanceKm)} km
+                    </span>
+                  )}
+                  <TripHint place={place} />
+                  <span className="rounded-full bg-slate-800 px-2 py-0.5 text-xs text-slate-400 whitespace-nowrap">
+                    {place.popularity >= 80 ? "Very popular" : place.popularity >= 50 ? "Popular" : "Hidden gem"}
+                  </span>
+                </div>
               </div>
               <p className="mt-2 text-sm text-slate-400 flex-1">{place.blurb}</p>
               <div className="mt-3 text-xs text-slate-500">
@@ -353,13 +363,11 @@ export default async function ExplorePage({
                     {activityEmoji(a)} {activityLabel(a)}
                   </span>
                 ))}
+                <span className="ml-auto">
+                  <VisitedButton place={place} compact />
+                </span>
               </div>
             </Link>
-            {distanceKm !== null && (
-              <span className="absolute right-3 top-3 rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-400">
-                {distanceKm < 10 ? distanceKm.toFixed(1) : Math.round(distanceKm)} km
-              </span>
-            )}
           </div>
         ))}
       </div>
