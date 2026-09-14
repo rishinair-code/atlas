@@ -53,7 +53,7 @@ export default function FootprintPage() {
           browsing and they&apos;ll show up as glowing pins on your world map.
         </p>
         <Link
-          href="/explore"
+          href="/"
           className="mt-6 inline-block rounded-lg bg-emerald-500 px-5 py-2 text-sm font-medium text-slate-950 hover:bg-emerald-400"
         >
           Explore places →

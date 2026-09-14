@@ -1,6 +1,13 @@
 import { NextRequest, NextResponse } from "next/server";
 
 export const runtime = "nodejs";
+/**
+ * Keep the function alive long enough for the mirror race + one retry
+ * round + the sparse-results broadening query. Without this, Vercel's
+ * default cap kills the request mid-flight and live results vanish
+ * entirely (observed in production while working locally).
+ */
+export const maxDuration = 60;
 
 const OVERPASS_ENDPOINTS = [
   // Kumi Systems public mirror first — it is usually faster and less
@@ -74,6 +81,13 @@ const ANYTHING_FILTERS: string[] = [
 /** Overpass radius cap in metres — larger queries time out. */
 const RADIUS_CAP_M = 100_000;
 
+/**
+ * Per-attempt timeout. The race across three mirrors means a hung mirror
+ * costs nothing — but each attempt must be short enough that two full
+ * rounds plus the broadening query fit inside `maxDuration`.
+ */
+const ATTEMPT_TIMEOUT_MS = 12_000;
+
 interface OverpassElement {
   type: string;
   id: number;
@@ -118,7 +132,7 @@ export async function GET(req: NextRequest) {
       method: "POST",
       headers: OVERPASS_HEADERS,
       body: `data=${encodeURIComponent(query)}`,
-      signal: AbortSignal.timeout(40_000),
+      signal: AbortSignal.timeout(ATTEMPT_TIMEOUT_MS),
     });
     if (!res.ok) throw new Error(`overpass ${res.status}`);
     return (await res.json()) as { elements: OverpassElement[] };

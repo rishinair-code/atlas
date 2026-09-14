@@ -1,6 +1,7 @@
 "use client";
 
-import { useEffect, useState } from "react";
+import { useState } from "react";
+import { createPortal } from "react-dom";
 import type { Place } from "@/lib/types";
 import { isVisited, markVisited, removeVisited } from "@/lib/store";
 import { useStore } from "@/lib/useStore";
@@ -14,7 +15,8 @@ interface Props {
 /**
  * "Mark as visited" — opens a small modal for date, rating and notes,
  * then persists via the Atlas store (Firebase when signed in, localStorage
- * as guest). Toggling back removes the visit.
+ * as guest). The modal renders through a portal to <body> so it can never
+ * inherit click handlers or navigation from card links around it.
  */
 export default function VisitedButton({ place, compact = false }: Props) {
   const { ready } = useStore();
@@ -72,81 +74,79 @@ export default function VisitedButton({ place, compact = false }: Props) {
         </button>
       )}
 
-      {open && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
-          onClick={(e) => {
-            // This button lives inside PlaceCard's <Link> — never navigate.
-            e.preventDefault();
-            e.stopPropagation();
-            setOpen(false);
-          }}
-        >
+      {open &&
+        typeof document !== "undefined" &&
+        createPortal(
           <div
-            className="w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-6"
-            onClick={(e) => {
-              e.preventDefault();
-              e.stopPropagation();
-            }}
+            className="fixed inset-0 z-50 flex items-center justify-center bg-black/70 p-4"
+            onClick={() => setOpen(false)}
           >
-            <h3 className="text-lg font-semibold">When did you visit {place.name}?</h3>
+            <div
+              className="w-full max-w-md rounded-2xl border border-slate-700 bg-slate-900 p-6"
+              onClick={(e) => e.stopPropagation()}
+            >
+              <h3 className="text-lg font-semibold">When did you visit {place.name}?</h3>
 
-            <label className="mt-4 block text-xs uppercase tracking-wide text-slate-500">
-              Date
-              <input
-                type="date"
-                value={date}
-                max={new Date().toISOString().slice(0, 10)}
-                onChange={(e) => setDate(e.target.value)}
-                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200"
-              />
-            </label>
+              <label className="mt-4 block text-xs uppercase tracking-wide text-slate-500">
+                Date
+                <input
+                  type="date"
+                  value={date}
+                  max={new Date().toISOString().slice(0, 10)}
+                  onChange={(e) => setDate(e.target.value)}
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-base text-slate-200"
+                />
+              </label>
 
-            <div className="mt-4">
-              <span className="text-xs uppercase tracking-wide text-slate-500">Rating</span>
-              <div className="mt-1 flex gap-1 text-2xl">
-                {[1, 2, 3, 4, 5].map((n) => (
-                  <button
-                    key={n}
-                    onClick={() => setRating(rating === n ? 0 : n)}
-                    className={n <= rating ? "text-amber-400" : "text-slate-700 hover:text-slate-500"}
-                    aria-label={`${n} star${n > 1 ? "s" : ""}`}
-                  >
-                    ★
-                  </button>
-                ))}
+              <div className="mt-4">
+                <span className="text-xs uppercase tracking-wide text-slate-500">Rating</span>
+                <div className="mt-1 flex gap-1 text-2xl">
+                  {[1, 2, 3, 4, 5].map((n) => (
+                    <button
+                      key={n}
+                      type="button"
+                      onClick={() => setRating(rating === n ? 0 : n)}
+                      className={n <= rating ? "text-amber-400" : "text-slate-700 hover:text-slate-500"}
+                      aria-label={`${n} star${n > 1 ? "s" : ""}`}
+                    >
+                      ★
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              <label className="mt-4 block text-xs uppercase tracking-wide text-slate-500">
+                Notes (optional)
+                <textarea
+                  value={notes}
+                  onChange={(e) => setNotes(e.target.value)}
+                  rows={3}
+                  placeholder="Who you went with, what you would do differently…"
+                  className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-base text-slate-200 placeholder:text-slate-600"
+                />
+              </label>
+
+              <div className="mt-6 flex justify-end gap-2">
+                <button
+                  type="button"
+                  onClick={() => setOpen(false)}
+                  className="rounded-lg px-4 py-2 text-sm text-slate-400 hover:text-white"
+                >
+                  Cancel
+                </button>
+                <button
+                  type="button"
+                  onClick={() => void save()}
+                  disabled={saving || !date}
+                  className="rounded-lg bg-emerald-500 px-5 py-2 text-sm font-medium text-slate-950 hover:bg-emerald-400 disabled:opacity-50"
+                >
+                  {saving ? "Saving…" : "Save visit"}
+                </button>
               </div>
             </div>
-
-            <label className="mt-4 block text-xs uppercase tracking-wide text-slate-500">
-              Notes (optional)
-              <textarea
-                value={notes}
-                onChange={(e) => setNotes(e.target.value)}
-                rows={3}
-                placeholder="Who you went with, what you'd do differently…"
-                className="mt-1 w-full rounded-lg border border-slate-700 bg-slate-950 px-3 py-2 text-sm text-slate-200 placeholder:text-slate-600"
-              />
-            </label>
-
-            <div className="mt-6 flex justify-end gap-2">
-              <button
-                onClick={() => setOpen(false)}
-                className="rounded-lg px-4 py-2 text-sm text-slate-400 hover:text-white"
-              >
-                Cancel
-              </button>
-              <button
-                onClick={() => void save()}
-                disabled={saving || !date}
-                className="rounded-lg bg-emerald-500 px-5 py-2 text-sm font-medium text-slate-950 hover:bg-emerald-400 disabled:opacity-50"
-              >
-                {saving ? "Saving…" : "Save visit"}
-              </button>
-            </div>
-          </div>
-        </div>
-      )}
+          </div>,
+          document.body,
+        )}
     </>
   );
 }

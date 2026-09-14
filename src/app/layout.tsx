@@ -22,10 +22,7 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
             </a>
             <nav className="flex gap-5 text-sm text-slate-300">
               <a href="/" className="hover:text-white">
-                Home
-              </a>
-              <a href="/explore" className="hover:text-white">
-                Explore
+                Discover
               </a>
               <a href="/footprint" className="hover:text-white">
                 Footprint

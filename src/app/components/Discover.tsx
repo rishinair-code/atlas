@@ -1,9 +1,8 @@
 "use client";
 
 import { useEffect, useMemo, useRef, useState } from "react";
-import Link from "next/link";
 import type { ActivityId, CostTier, PlaceKind } from "@/lib/types";
-import { ALL_PLACES } from "@/data";
+import { ALL_PLACES, REGIONS } from "@/data";
 import { haversineKm } from "@/lib/geo";
 import { ACTIVITY_MAP, KINDS_BY_ACTIVITY } from "@/lib/activities";
 import PlaceCard from "./PlaceCard";
@@ -15,6 +14,7 @@ import {
   locationDisplayName,
   type SavedLocation,
 } from "@/lib/location";
+
 const RADIUS_OPTIONS = [50, 150, 400, 1000];
 const RADIUS_LABELS: Record<number, string> = {
   50: "50 km",
@@ -25,6 +25,9 @@ const RADIUS_LABELS: Record<number, string> = {
 
 /** Overpass query radius cap (metres) enforced by /api/places/nearby. */
 const LIVE_RADIUS_CAP_M = 50_000;
+
+/** How many curated results render before "Show more". */
+const PAGE_SIZE = 24;
 
 const CITY_PRESETS: { label: string; lat: number; lng: number }[] = [
   { label: "Hamilton", lat: 43.2563, lng: -79.8689 },
@@ -46,9 +49,14 @@ interface GeocodeHit {
 }
 
 /**
- * Discovery panel: pick any location (detect, presets, or worldwide city
- * search), then filter by activity, place type, budget, radius and sort.
- * Results fuse the curated dataset with live OpenStreetMap POIs.
+ * The Atlas search page, embedded on the home page. Two modes:
+ *  - Global: browse everything (text search, region, activity, type, budget).
+ *  - Located: same filters scoped to a radius around a saved point, sorted
+ *    by real distance, plus live OpenStreetMap results.
+ * All state is reflected in the URL (?activity=..&lat=..) so filtered views
+ * are shareable and survive back-navigation — read from location.search on
+ * mount, written with history.replaceState on change (no rerenders pushed
+ * through the router).
  */
 export default function Discover() {
   const [point, setPoint] = useState<SavedLocation | null>(null);
@@ -56,16 +64,83 @@ export default function Discover() {
   const [activity, setActivity] = useState<ActivityId | "">("");
   const [kind, setKind] = useState<PlaceKind | "">("");
   const [maxTier, setMaxTier] = useState<CostTier | "">("");
-  const [sort, setSort] = useState<SortKey>("distance");
+  const [sort, setSort] = useState<SortKey>("popularity");
+  const [region, setRegion] = useState<string>("");
+  const [text, setText] = useState("");
+  const [cap, setCap] = useState(PAGE_SIZE);
   const [locating, setLocating] = useState(false);
   const [locError, setLocError] = useState<"denied" | "failed" | null>(null);
 
-  // Restore a saved location once on mount so the pick survives reloads
-  // and navigation between the home and Explore pages. The restored point
-  // renders immediately, signalling that Atlas remembered the location.
+  // Restore state from the URL (then localStorage for the location) on mount.
   useEffect(() => {
-    setPoint(loadLocation());
+    const sp = new URLSearchParams(window.location.search);
+    const qAct = sp.get("activity") as ActivityId | null;
+    if (qAct && ACTIVITY_MAP[qAct]) setActivity(qAct);
+    const qKind = sp.get("kind") as PlaceKind | null;
+    if (qKind) setKind(qKind);
+    const qTier = Number(sp.get("budget"));
+    if (qTier >= 1 && qTier <= 5) setMaxTier(qTier as CostTier);
+    const qRegion = sp.get("region");
+    if (qRegion && (REGIONS as readonly string[]).includes(qRegion)) setRegion(qRegion);
+    const qText = sp.get("q");
+    if (qText) setText(qText);
+    const qRadius = Number(sp.get("radius"));
+    if ([50, 150, 400, 1000].includes(qRadius)) setRadiusKm(qRadius);
+    const qSort = sp.get("sort") as SortKey | null;
+    if (qSort === "distance" || qSort === "popularity" || qSort === "budget") setSort(qSort);
+
+    const lat = Number(sp.get("lat"));
+    const lng = Number(sp.get("lng"));
+    if (Number.isFinite(lat) && Number.isFinite(lng) && (sp.has("lat") || sp.has("lng"))) {
+      const fromUrl: SavedLocation = {
+        lat,
+        lng,
+        label: sp.get("label") ?? "your location",
+        source: "city",
+      };
+      setPoint(fromUrl);
+      setSort(sp.get("sort") === "popularity" ? "popularity" : sp.get("sort") === "budget" ? "budget" : "distance");
+      saveLocation(fromUrl);
+    } else {
+      const saved = loadLocation();
+      if (saved) {
+        setPoint(saved);
+        setSort((s) => (s === "popularity" ? "distance" : s));
+      }
+    }
   }, []);
+
+  // Reflect filter state in the URL without a router round-trip.
+  const syncedOnce = useRef(false);
+  useEffect(() => {
+    if (!syncedOnce.current) {
+      // Let the mount-effect land first so we don't clobber URL params.
+      syncedOnce.current = true;
+      return;
+    }
+    const sp = new URLSearchParams();
+    if (activity) sp.set("activity", activity);
+    if (kind) sp.set("kind", kind);
+    if (maxTier) sp.set("budget", String(maxTier));
+    if (region) sp.set("region", region);
+    if (text.trim()) sp.set("q", text.trim());
+    if (point) {
+      sp.set("lat", point.lat.toFixed(5));
+      sp.set("lng", point.lng.toFixed(5));
+      sp.set("label", point.label);
+      sp.set("radius", String(radiusKm));
+      sp.set("sort", sort);
+    } else if (sort !== "popularity") {
+      sp.set("sort", sort);
+    }
+    const qs = sp.toString();
+    window.history.replaceState(null, "", qs ? `/?${qs}` : "/");
+  }, [activity, kind, maxTier, region, text, point, radiusKm, sort]);
+
+  // Reset pagination whenever the result set changes shape.
+  useEffect(() => {
+    setCap(PAGE_SIZE);
+  }, [activity, kind, maxTier, region, text, point, radiusKm, sort]);
 
   const [query, setQuery] = useState("");
   const [hits, setHits] = useState<GeocodeHit[]>([]);
@@ -101,9 +176,8 @@ export default function Discover() {
     return () => clearTimeout(t);
   }, [query]);
 
-  // Live OpenStreetMap POIs — fetched whenever a point is set. Type/budget
-  // filters only apply to the curated list; the live map stays visible so
-  // the page never feels empty in areas with thin curated coverage.
+  // Live OpenStreetMap POIs — fetched whenever the point/radius/activity
+  // changes. Only shown when a location is set.
   useEffect(() => {
     if (!point) {
       setLive([]);
@@ -147,12 +221,17 @@ export default function Discover() {
         setLiveState("error");
       }
     })();
-  }, [point, radiusKm, activity, kind, maxTier]);
+  }, [point, radiusKm, activity]);
 
   function setAndRemember(p: { lat: number; lng: number; label: string; source: "detected" | "city" } | null) {
     setPoint(p);
-    if (p) saveLocation(p);
-    else clearLocation();
+    if (p) {
+      saveLocation(p);
+      if (sort === "popularity") setSort("distance");
+    } else {
+      clearLocation();
+      if (sort === "distance") setSort("popularity");
+    }
   }
 
   function pick(hit: GeocodeHit) {
@@ -187,80 +266,64 @@ export default function Discover() {
     );
   }
 
+  // Curated results: all filters apply globally; distance only when located.
   const results = useMemo(() => {
-    if (!point) return [];
+    const needle = text.trim().toLowerCase();
     const list = ALL_PLACES.map((place) => ({
       place,
-      distanceKm: haversineKm(point.lat, point.lng, place.lat, place.lng),
+      distanceKm: point ? haversineKm(point.lat, point.lng, place.lat, place.lng) : null,
     }))
-      .filter((r) => r.distanceKm <= radiusKm)
+      .filter((r) => (point ? (r.distanceKm ?? 0) <= radiusKm : true))
       .filter((r) => (activity ? r.place.activities.includes(activity) : true))
       .filter((r) => (kind ? r.place.kind === kind : true))
-      .filter((r) => (maxTier ? r.place.costTier <= maxTier : true));
-    if (sort === "distance") list.sort((a, b) => a.distanceKm - b.distanceKm);
-    if (sort === "popularity") list.sort((a, b) => b.place.popularity - a.place.popularity);
-    if (sort === "budget") list.sort((a, b) => a.place.costTier - b.place.costTier || a.distanceKm - b.distanceKm);
-    return list.slice(0, 12);
-  }, [point, radiusKm, activity, kind, maxTier, sort]);
+      .filter((r) => (maxTier ? r.place.costTier <= maxTier : true))
+      .filter((r) => (region ? r.place.region === region : true))
+      .filter((r) =>
+        needle
+          ? r.place.name.toLowerCase().includes(needle) ||
+            r.place.country.toLowerCase().includes(needle) ||
+            r.place.blurb.toLowerCase().includes(needle)
+          : true,
+      );
+    if (point && sort === "distance") list.sort((a, b) => (a.distanceKm ?? 0) - (b.distanceKm ?? 0));
+    else if (sort === "budget")
+      list.sort((a, b) => a.place.costTier - b.place.costTier || b.place.popularity - a.place.popularity);
+    else list.sort((a, b) => b.place.popularity - a.place.popularity);
+    return list;
+  }, [point, radiusKm, activity, kind, maxTier, region, text, sort]);
 
   // Live POIs, deduped against curated cards by name, sorted by distance.
   const liveResults = useMemo(() => {
     if (!point) return [];
-    const curatedNames = new Set(results.map((r) => r.place.name.toLowerCase()));
+    const curatedNames = new Set(results.slice(0, cap).map((r) => r.place.name.toLowerCase()));
     return live
       .map((poi) => ({ poi, distanceKm: haversineKm(point.lat, point.lng, poi.lat, poi.lng) }))
       .filter((r) => !curatedNames.has(r.poi.name.toLowerCase()))
       .sort((a, b) => a.distanceKm - b.distanceKm)
       .slice(0, 24);
-  }, [live, point, results]);
-
-  const showLive = Boolean(point);
+  }, [live, point, results, cap]);
 
   // Subtypes for the Type dropdown: restricted to the chosen activity when
-  // one is active, otherwise whatever exists within the search radius.
+  // one is active, otherwise all kinds.
   const kindsAvailable = useMemo(() => {
-    const fromActivity = activity ? KINDS_BY_ACTIVITY[activity] : undefined;
-    if (fromActivity) {
+    if (activity) {
       // Always keep the currently selected subtype visible, even if the
       // mapping wouldn't list it — clearing it silently is worse.
-      const list = new Set<PlaceKind>(fromActivity);
+      const list = new Set<PlaceKind>(KINDS_BY_ACTIVITY[activity]);
       if (kind) list.add(kind);
       return [...list];
     }
-    if (!point) return [];
     const set = new Set<PlaceKind>();
-    for (const p of ALL_PLACES) {
-      if (haversineKm(point.lat, point.lng, p.lat, p.lng) <= radiusKm) set.add(p.kind);
-    }
+    for (const p of ALL_PLACES) set.add(p.kind);
     return [...set].sort();
-  }, [point, radiusKm, activity, kind]);
+  }, [activity, kind]);
+
+  const activeFilters = Boolean(activity || kind || maxTier || region || text.trim());
 
   return (
-    <section className="mt-10">
-      <h2 className="text-xl font-semibold">Discover near you</h2>
-      <p className="mt-1 text-sm text-slate-400">
-        Set your location — detect it or search any city on Earth — then filter
-        by what you want to do. Results combine the curated atlas with live
-        OpenStreetMap places.
-      </p>
-
+    <section>
       {/* Location row */}
-      {point && (
-        <p className="mt-3 inline-flex items-center gap-2 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-400">
-          <span aria-hidden>📍</span>
-          <span>
-            Using: <strong className="font-semibold">{locationDisplayName(point)}</strong>
-          </span>
-          <button
-            onClick={() => setAndRemember(null)}
-            className="ml-1 rounded text-emerald-500/70 hover:text-red-400"
-            aria-label="Clear saved location"
-          >
-            ✕
-          </button>
-        </p>
-      )}
-      <div className="mt-4 flex flex-wrap items-center gap-2 text-sm">
+      <div className="flex flex-wrap items-center gap-2 text-sm">
         <button
           onClick={locate}
           disabled={locating}
@@ -281,16 +344,33 @@ export default function Discover() {
             {c.label}
           </button>
         ))}
+        {point && (
+          <button
+            onClick={() => setAndRemember(null)}
+            className="rounded-full px-3 py-1 border border-slate-700 text-slate-400 hover:border-red-400 hover:text-red-300"
+          >
+            ✕ Clear location
+          </button>
+        )}
       </div>
 
-      {/* City search */}
+      {point && (
+        <p className="mt-3 inline-flex items-center gap-2 rounded-full border border-emerald-500/40 bg-emerald-500/10 px-3 py-1 text-xs text-emerald-400">
+          <span aria-hidden>📍</span>
+          <span>
+            Using: <strong className="font-semibold">{locationDisplayName(point)}</strong>
+          </span>
+        </p>
+      )}
+
+      {/* City search — 16px text so iOS doesn't zoom on focus */}
       <div className="relative mt-3 max-w-md">
         <input
           type="text"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
           placeholder="Or search any city worldwide…"
-          className="w-full rounded-lg border border-slate-700 bg-slate-900 px-4 py-2 text-sm outline-none focus:border-emerald-500"
+          className="w-full rounded-lg border border-slate-700 bg-slate-900 px-4 py-2 text-base outline-none focus:border-emerald-500"
         />
         {searching && (
           <span className="absolute right-3 top-2.5 text-xs text-slate-500">…</span>
@@ -323,160 +403,193 @@ export default function Discover() {
         </p>
       )}
 
-      {point && (
-        <>
-          {/* Filters row */}
-          <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
-            <div className="flex items-center gap-2">
-              <span className="text-slate-500">Radius</span>
-              {RADIUS_OPTIONS.map((r) => (
-                <button
-                  key={r}
-                  onClick={() => setRadiusKm(r)}
-                  className={`rounded-full px-3 py-1 border ${
-                    radiusKm === r
-                      ? "border-emerald-500 text-emerald-400"
-                      : "border-slate-700 hover:border-slate-500"
-                  }`}
-                >
-                  {RADIUS_LABELS[r]}
-                </button>
-              ))}
-            </div>
-            <div className="flex items-center gap-2">
-              <label className="text-slate-500" htmlFor="disc-activity">
-                Doing
-              </label>
-              <select
-                id="disc-activity"
-                value={activity}
-                onChange={(e) => {
-                  const next = e.target.value as ActivityId | "";
-                  setActivity(next);
-                  // Drop a subtype that no longer applies to the new
-                  // activity (e.g. Beach lingering after switching from
-                  // Beach to Architecture).
-                  const allowed = next ? KINDS_BY_ACTIVITY[next] : undefined;
-                  if (kind && allowed && !allowed.includes(kind)) setKind("");
-                }}
-                className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm"
-              >
-                <option value="">Anything</option>
-                {Object.values(ACTIVITY_MAP).map((a) => (
-                  <option key={a.id} value={a.id}>
-                    {a.emoji} {a.label}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="flex items-center gap-2">
-              <label className="text-slate-500" htmlFor="disc-kind">
-                {activity ? "Subtype" : "Type"}
-              </label>
-              <select
-                id="disc-kind"
-                value={kind}
-                onChange={(e) => setKind(e.target.value as PlaceKind | "")}
-                className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm"
-              >
-                <option value="">Any {activity ? "subtype" : "type"}</option>
-                {kindsAvailable.map((k) => (
-                  <option key={k} value={k}>
-                    {kindLabel(k)}
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="flex items-center gap-2">
-              <label className="text-slate-500" htmlFor="disc-tier">
-                Max budget
-              </label>
-              <select
-                id="disc-tier"
-                value={maxTier}
-                onChange={(e) => setMaxTier((e.target.value || "") as CostTier | "")}
-                className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm"
-              >
-                <option value="">Any</option>
-                {[1, 2, 3, 4, 5].map((t) => (
-                  <option key={t} value={t}>
-                    {"$".repeat(t)} or less
-                  </option>
-                ))}
-              </select>
-            </div>
-            <div className="flex items-center gap-2">
-              <label className="text-slate-500" htmlFor="disc-sort">
-                Sort
-              </label>
-              <select
-                id="disc-sort"
-                value={sort}
-                onChange={(e) => setSort(e.target.value as SortKey)}
-                className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-1.5 text-sm"
-              >
-                <option value="distance">Closest first</option>
-                <option value="popularity">Most popular</option>
-                <option value="budget">Cheapest first</option>
-              </select>
-            </div>
-          </div>
-
-          <p className="mt-4 text-xs text-slate-500">
-            {results.length} curated place{results.length === 1 ? "" : "s"} within{" "}
-            {RADIUS_LABELS[radiusKm]} of {point.label}
-            {showLive && liveState === "ok" && (
-              <>
-                {" · "}
-                {liveResults.length} live from OpenStreetMap
-                {radiusKm > 50 && " (live search capped at 50 km)"}
-              </>
-            )}
-            {showLive && liveState === "loading" && " · searching the live map…"}
-          </p>
-
-          {results.length > 0 && (
-            <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-              {results.map(({ place, distanceKm }) => (
-                <div key={place.id} className="relative">
-                  <PlaceCard place={place} />
-                  <span className="absolute right-3 top-3 rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-400">
-                    {distanceKm < 10 ? distanceKm.toFixed(1) : Math.round(distanceKm)} km
-                  </span>
-                </div>
-              ))}
-            </div>
-          )}
-
-          {showLive && liveResults.length > 0 && (
-            <>
-              <h3 className="mt-8 text-lg font-semibold">
-                More near {point.label}
-                <span className="ml-2 align-middle text-xs font-normal text-slate-500">
-                  live · OpenStreetMap
-                </span>
-              </h3>
-              <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
-                {liveResults.map(({ poi, distanceKm }) => (
-                  <LivePoiCard key={poi.id} poi={poi} distanceKm={distanceKm} />
-                ))}
-              </div>
-            </>
-          )}
-
-          {results.length === 0 && liveResults.length === 0 && liveState !== "loading" && (
-            <p className="mt-4 text-sm text-slate-500">
-              Nothing matches here — widen the radius or relax a filter.
-            </p>
-          )}
-
-          <Link
-            href={`/explore?lat=${point.lat}&lng=${point.lng}&radius=${radiusKm}${activity ? `&activity=${activity}` : ""}`}
-            className="mt-6 inline-block text-sm text-emerald-400 hover:text-emerald-300"
+      {/* Filter bar — works identically with or without a location */}
+      <div className="mt-5 flex flex-wrap items-center gap-x-4 gap-y-2 text-sm">
+        <input
+          type="search"
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          placeholder="Search places, countries…"
+          className="w-full sm:w-56 rounded-lg border border-slate-700 bg-slate-900 px-4 py-2 text-base outline-none focus:border-emerald-500"
+        />
+        <div className="flex items-center gap-2">
+          <label className="text-slate-500" htmlFor="disc-activity">
+            Doing
+          </label>
+          <select
+            id="disc-activity"
+            value={activity}
+            onChange={(e) => {
+              const next = e.target.value as ActivityId | "";
+              setActivity(next);
+              // Drop a subtype that no longer applies to the new activity.
+              const allowed = next ? KINDS_BY_ACTIVITY[next] : undefined;
+              if (kind && allowed && !allowed.includes(kind)) setKind("");
+            }}
+            className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-base"
           >
-            Browse the atlas on the Explore page →
-          </Link>
+            <option value="">Anything</option>
+            {Object.values(ACTIVITY_MAP).map((a) => (
+              <option key={a.id} value={a.id}>
+                {a.emoji} {a.label}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="text-slate-500" htmlFor="disc-kind">
+            {activity ? "Subtype" : "Type"}
+          </label>
+          <select
+            id="disc-kind"
+            value={kind}
+            onChange={(e) => setKind(e.target.value as PlaceKind | "")}
+            className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-base"
+          >
+            <option value="">Any {activity ? "subtype" : "type"}</option>
+            {kindsAvailable.map((k) => (
+              <option key={k} value={k}>
+                {kindLabel(k)}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="text-slate-500" htmlFor="disc-region">
+            Region
+          </label>
+          <select
+            id="disc-region"
+            value={region}
+            onChange={(e) => setRegion(e.target.value)}
+            className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-base"
+          >
+            <option value="">Worldwide</option>
+            {REGIONS.map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="text-slate-500" htmlFor="disc-tier">
+            Max budget
+          </label>
+          <select
+            id="disc-tier"
+            value={maxTier}
+            onChange={(e) => setMaxTier((e.target.value || "") as CostTier | "")}
+            className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-base"
+          >
+            <option value="">Any</option>
+            {[1, 2, 3, 4, 5].map((t) => (
+              <option key={t} value={t}>
+                {"$".repeat(t)} or less
+              </option>
+            ))}
+          </select>
+        </div>
+        <div className="flex items-center gap-2">
+          <label className="text-slate-500" htmlFor="disc-sort">
+            Sort
+          </label>
+          <select
+            id="disc-sort"
+            value={sort}
+            onChange={(e) => setSort(e.target.value as SortKey)}
+            className="rounded-lg border border-slate-700 bg-slate-900 px-3 py-2 text-base"
+          >
+            {point && <option value="distance">Closest first</option>}
+            <option value="popularity">Most popular</option>
+            <option value="budget">Cheapest first</option>
+          </select>
+        </div>
+        {point && (
+          <div className="flex items-center gap-2">
+            <span className="text-slate-500">Radius</span>
+            {RADIUS_OPTIONS.map((r) => (
+              <button
+                key={r}
+                onClick={() => setRadiusKm(r)}
+                className={`rounded-full px-3 py-1 border ${
+                  radiusKm === r
+                    ? "border-emerald-500 text-emerald-400"
+                    : "border-slate-700 hover:border-slate-500"
+                }`}
+              >
+                {RADIUS_LABELS[r]}
+              </button>
+            ))}
+          </div>
+        )}
+      </div>
+
+      <p className="mt-4 text-xs text-slate-500">
+        {results.length} place{results.length === 1 ? "" : "s"}
+        {point
+          ? ` within ${RADIUS_LABELS[radiusKm]} of ${point.label}`
+          : region
+            ? ` in ${region}`
+            : " worldwide"}
+        {activeFilters ? " matching your filters" : ""}
+        {point && liveState === "ok" && (
+          <>
+            {" · "}
+            {liveResults.length} live from OpenStreetMap
+            {radiusKm > 50 && " (live search capped at 50 km)"}
+          </>
+        )}
+        {point && liveState === "loading" && " · searching the live map…"}
+      </p>
+
+      {results.length > 0 && (
+        <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+          {results.slice(0, cap).map(({ place, distanceKm }) => (
+            <div key={place.id} className="relative">
+              <PlaceCard place={place} />
+              {distanceKm !== null && (
+                <span className="absolute right-3 top-3 z-10 rounded-full bg-emerald-500/15 px-2 py-0.5 text-xs font-medium text-emerald-400">
+                  {distanceKm < 10 ? distanceKm.toFixed(1) : Math.round(distanceKm)} km
+                </span>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {results.length > cap && (
+        <div className="mt-5 text-center">
+          <button
+            onClick={() => setCap((c) => c + PAGE_SIZE)}
+            className="rounded-lg border border-slate-700 px-5 py-2 text-sm text-slate-300 hover:border-emerald-500 hover:text-emerald-400"
+          >
+            Show more ({results.length - cap} remaining)
+          </button>
+        </div>
+      )}
+
+      {point && liveResults.length > 0 && (
+        <>
+          <h3 className="mt-8 text-lg font-semibold">
+            More near {point.label}
+            <span className="ml-2 align-middle text-xs font-normal text-slate-500">
+              live · OpenStreetMap
+            </span>
+          </h3>
+          <div className="mt-3 grid gap-4 sm:grid-cols-2 lg:grid-cols-3">
+            {liveResults.map(({ poi, distanceKm }) => (
+              <LivePoiCard key={poi.id} poi={poi} distanceKm={distanceKm} />
+            ))}
+          </div>
         </>
+      )}
+
+      {results.length === 0 && liveResults.length === 0 && (
+        <p className="mt-4 text-sm text-slate-500">
+          Nothing matches — {point ? "widen the radius or " : ""}relax a filter.
+          {point && liveState === "loading" ? " The live map is still searching…" : ""}
+        </p>
       )}
     </section>
   );

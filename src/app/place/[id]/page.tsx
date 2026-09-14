@@ -8,6 +8,7 @@ import type { NearbyResult } from "@/lib/discover";
 import PlaceGuide from "@/app/components/PlaceGuide";
 import VisitedButton from "@/app/components/VisitedButton";
 import GettingThere from "@/app/components/GettingThere";
+import PlaceImage from "@/app/components/PlaceImage";
 
 export function generateStaticParams() {
   return ALL_PLACES.map((p) => ({ id: p.id }));
@@ -27,11 +28,20 @@ export default async function PlacePage({ params }: { params: Promise<{ id: stri
 
   return (
     <div className="mx-auto max-w-6xl px-4 py-10">
-      <Link href="/explore" className="text-sm text-slate-400 hover:text-white">
-        ← Back to explore
+      <Link href="/" className="text-sm text-slate-400 hover:text-white">
+        ← Back to discover
       </Link>
 
-      <header className="mt-4">
+      <div className="mt-4 overflow-hidden rounded-2xl border border-slate-800">
+        <PlaceImage
+          placeId={place.id}
+          placeName={place.name}
+          emoji={ACTIVITY_MAP[place.activities[0]]?.emoji ?? "🧭"}
+          heightClass="h-56 sm:h-72"
+        />
+      </div>
+
+      <header className="mt-6">
         <div className="text-sm text-slate-500">
           {place.region} · {place.country} · {place.kind}
         </div>
@@ -48,7 +58,7 @@ export default async function PlacePage({ params }: { params: Promise<{ id: stri
           return (
             <Link
               key={a}
-              href={`/explore?activity=${a}`}
+              href={`/?activity=${a}`}
               className="rounded-full border border-slate-700 px-3 py-1 text-sm hover:border-emerald-500 hover:text-emerald-400"
             >
               {def ? `${def.emoji} ${def.label}` : a}
